@@ -24,6 +24,7 @@ import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
+from detectron2.data.datasets import register_coco_instances
 from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, hooks, launch
 from detectron2.evaluation import (
     CityscapesInstanceEvaluator,
@@ -37,6 +38,7 @@ from detectron2.evaluation import (
     verify_results,
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
+from traitlets.traitlets import parse_notifier_name
 
 
 def build_evaluator(cfg, dataset_name, output_folder=None):
@@ -116,12 +118,19 @@ def setup(args):
     cfg = get_cfg()
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    if (args.train_fname is not None) and (args.valid_fname is not None):
+      cfg.DATASETS.TRAIN = ("train_dataset",)
+      cfg.DATASETS.TEST = ("valid_dataset",)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
 
 
 def main(args):
+    if (args.train_fname is not None) and (args.valid_fname is not None):
+      register_coco_instances("train_dataset", {}, args.train_fname, args.path2images)
+      register_coco_instances("valid_dataset", {}, args.valid_fname, args.path2images)
+
     cfg = setup(args)
 
     if args.eval_only:
@@ -151,7 +160,11 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = default_argument_parser().parse_args()
+    parser = default_argument_parser()
+    parser.add_argument("--train_fname", type=str, default=None, help="coco_train.json")
+    parser.add_argument("--valid_fname", type=str, default=None, help="coco_valid.json")
+    parser.add_argument("--path2images", type=str, default=None)
+    args = parser.parse_args()
     print("Command Line Args:", args)
     launch(
         main,
