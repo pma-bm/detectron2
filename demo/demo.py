@@ -9,29 +9,30 @@ import time
 import warnings
 import cv2
 import tqdm
+import json
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
 
+import warnings 
+warnings.filterwarnings("ignore")
+
+import torch
 from predictor import VisualizationDemo
 
 # constants
 WINDOW_NAME = "COCO detections"
-
+FINAL_SHAPE = (530, 550)
+FPS = 30
 
 def setup_cfg(args):
-    # load config from file and command-line arguments
     cfg = get_cfg()
-    # To use demo for Panoptic-DeepLab, please uncomment the following two lines.
-    # from detectron2.projects.panoptic_deeplab import add_panoptic_deeplab_config  # noqa
-    # add_panoptic_deeplab_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # Set score_threshold for builtin models
     cfg.MODEL.RETINANET.SCORE_THRESH_TEST = args.confidence_threshold
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = args.confidence_threshold
-    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
     cfg.freeze()
     return cfg
 
@@ -57,7 +58,6 @@ def get_parser():
         help="A file or directory to save output visualizations. "
         "If not given, will show output in an OpenCV window.",
     )
-
     parser.add_argument(
         "--confidence-threshold",
         type=float,
@@ -90,6 +90,21 @@ def test_opencv_video_format(codec, file_ext):
         return False
 
 
+def get_file_name(output_dir):
+    base_ = "trial_"
+    fnames = glob.glob(os.path.join(output_dir, "*.mp4"))
+    if fnames:
+        nums = []
+        for fname in fnames:
+            num_ = fname.split("/")[-1].split("_")[-1].split(".")[0]
+            nums.append(int(num_))
+        fnum = str(max(nums) + 1)
+        ofnm = base_ + fnum + ".mp4"  # output file name
+    else:
+        ofnm = "trial_1.mp4"
+    return os.path.join(output_dir, ofnm)
+
+
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     args = get_parser().parse_args()
@@ -98,8 +113,7 @@ if __name__ == "__main__":
     logger.info("Arguments: " + str(args))
 
     cfg = setup_cfg(args)
-
-    demo = VisualizationDemo(cfg)
+    demo = VisualizationDemo(cfg, FINAL_SHAPE, parallel=False)
 
     if args.input:
         if len(args.input) == 1:
@@ -119,7 +133,6 @@ if __name__ == "__main__":
                     time.time() - start_time,
                 )
             )
-
             if args.output:
                 if os.path.isdir(args.output):
                     assert os.path.isdir(args.output), args.output
@@ -133,17 +146,44 @@ if __name__ == "__main__":
                 cv2.imshow(WINDOW_NAME, visualized_output.get_image()[:, :, ::-1])
                 if cv2.waitKey(0) == 27:
                     break  # esc to quit
+
     elif args.webcam:
-        assert args.input is None, "Cannot have both --input and --webcam!"
-        assert args.output is None, "output not yet supported with --webcam!"
+        # assert args.input is None, "Cannot have both --input and --webcam!"
+        # assert args.output is None, "output not yet supported with --webcam!"
         cam = cv2.VideoCapture(0)
-        for vis in tqdm.tqdm(demo.run_on_video(cam)):
+        if args.output is not None:
+            filename = get_file_name(args.output)
+            output_file = cv2.VideoWriter(
+                filename = filename, 
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v"), 
+                fps = FPS, 
+                frameSize = FINAL_SHAPE, 
+                isColor = True
+            )
+        gather_bboxes = {}  # gather bboxes from the predictions
+        save_freq = 1
+        c_ = 0  # counter
+        for preds, vis in tqdm.tqdm(demo.run_on_video(cam)):
+            if (c_ % save_freq == 0) and (args.output is not None):
+                output_file.write(vis)
+                bboxes = [
+                    x.type(torch.int).tolist() for x in preds.get_fields()["pred_boxes"]
+                ]
+                score = [x.item() for x in preds.get_fields()["scores"]]
+                gather_bboxes[c_] = {"bboxes": bboxes, "score": score}
+            c_ += 1
+
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
             cv2.imshow(WINDOW_NAME, vis)
-            if cv2.waitKey(1) == 27:
-                break  # esc to quit
+            if cv2.waitKey(33) == ord('q'):
+                break  # press q to quit
         cam.release()
         cv2.destroyAllWindows()
+        if args.output is not None:
+            json_fname = filename.split(".")[0] + ".json"  # replace .mp4 with .json
+            with open(json_fname, "w") as f:
+                json.dump(gather_bboxes, f)
+
     elif args.video_input:
         video = cv2.VideoCapture(args.video_input)
         width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -173,7 +213,7 @@ if __name__ == "__main__":
                 isColor=True,
             )
         assert os.path.isfile(args.video_input)
-        for vis_frame in tqdm.tqdm(demo.run_on_video(video), total=num_frames):
+        for _, vis_frame in tqdm.tqdm(demo.run_on_video(video), total=num_frames):
             if args.output:
                 output_file.write(vis_frame)
             else:

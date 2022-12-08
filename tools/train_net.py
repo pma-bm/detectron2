@@ -16,6 +16,8 @@ this file as an example of how to use the library.
 You may want to write your own script with your datasets and other customizations.
 """
 
+# TODO: change augmentations from outisde within "mytrainer.py"
+
 import logging
 import os
 from collections import OrderedDict
@@ -25,7 +27,7 @@ from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets import register_coco_instances
-from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, hooks, launch
+from detectron2.engine import DefaultTrainer, MyTrainer, default_argument_parser, default_setup, hooks, launch
 from detectron2.evaluation import (
     CityscapesInstanceEvaluator,
     CityscapesSemSegEvaluator,
@@ -119,8 +121,13 @@ def setup(args):
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     if (args.train_fname is not None) and (args.valid_fname is not None):
-      cfg.DATASETS.TRAIN = ("train_dataset",)
-      cfg.DATASETS.TEST = ("valid_dataset",)
+        cfg.DATASETS.TRAIN = ("train_dataset",)
+        cfg.DATASETS.TEST = ("valid_dataset",)
+    if cfg.SOLVER.LR_SCHEDULER_NAME == "WarmupPolyLR":
+        cfg.SOLVER.POLY_LR_POWER = 0.9
+        cfg.SOLVER.POLY_LR_CONSTANT_ENDING = 0.0
+    # if cfg.SOLVER.LR_SCHEDULER_NAME == "WarmupMultiStepLR":
+    #     cfg.SOLVER.STEPS = (500, 1000, 1500)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
@@ -128,11 +135,10 @@ def setup(args):
 
 def main(args):
     if (args.train_fname is not None) and (args.valid_fname is not None):
-      register_coco_instances("train_dataset", {}, args.train_fname, args.path2images)
-      register_coco_instances("valid_dataset", {}, args.valid_fname, args.path2images)
+        register_coco_instances("train_dataset", {}, args.train_fname, args.path2images)
+        register_coco_instances("valid_dataset", {}, args.valid_fname, args.path2images)
 
     cfg = setup(args)
-
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -150,7 +156,10 @@ def main(args):
     consider writing your own training loop (see plain_train_net.py) or
     subclassing the trainer.
     """
-    trainer = Trainer(cfg)
+    if args.mytrainer:
+        trainer = MyTrainer(cfg)
+    else:
+        trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
     if cfg.TEST.AUG.ENABLED:
         trainer.register_hooks(
@@ -161,9 +170,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = default_argument_parser()
-    parser.add_argument("--train_fname", type=str, default=None, help="coco_train.json")
-    parser.add_argument("--valid_fname", type=str, default=None, help="coco_valid.json")
+    parser.add_argument("--train_fname", type=str, default=None, help="path to coco_train.json")
+    parser.add_argument("--valid_fname", type=str, default=None, help="path to coco_valid.json")
     parser.add_argument("--path2images", type=str, default=None)
+    parser.add_argument("--mytrainer", action='store_true', help="use own trainer with lr_scheduler and eval loss")
     args = parser.parse_args()
     print("Command Line Args:", args)
     launch(

@@ -12,8 +12,19 @@ from detectron2.utils.video_visualizer import VideoVisualizer
 from detectron2.utils.visualizer import ColorMode, Visualizer
 
 
+def crop_frame(img, final_shape):
+    """
+    Cropping the frames according to specific camera setup.
+    """
+    x1, x2 = int(0.38*img.shape[1]), int(0.65*img.shape[1])  # left-right
+    y1, y2 = int(0.25*img.shape[0]), int(0.80*img.shape[0])  # top-bottom
+    img_cropped = img[y1:y2, x1:x2]
+    img_cropped = cv2.resize(img_cropped, final_shape)
+    return img_cropped
+
+
 class VisualizationDemo(object):
-    def __init__(self, cfg, instance_mode=ColorMode.IMAGE, parallel=False):
+    def __init__(self, cfg, final_shape, instance_mode=ColorMode.IMAGE, parallel=False):
         """
         Args:
             cfg (CfgNode):
@@ -21,6 +32,8 @@ class VisualizationDemo(object):
             parallel (bool): whether to run the model in different processes from visualization.
                 Useful since the visualization logic can be slow.
         """
+        # OWN CHAGES:
+        self.final_shape = final_shape
         self.metadata = MetadataCatalog.get(
             cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused"
         )
@@ -103,7 +116,7 @@ class VisualizationDemo(object):
 
             # Converts Matplotlib RGB format to OpenCV BGR format
             vis_frame = cv2.cvtColor(vis_frame.get_image(), cv2.COLOR_RGB2BGR)
-            return vis_frame
+            return predictions, vis_frame
 
         frame_gen = self._frame_from_video(video)
         if self.parallel:
@@ -112,6 +125,8 @@ class VisualizationDemo(object):
             frame_data = deque()
 
             for cnt, frame in enumerate(frame_gen):
+                # OWN CHANGES:
+                frame = crop_frame(frame, self.final_shape)
                 frame_data.append(frame)
                 self.predictor.put(frame)
 
@@ -126,7 +141,10 @@ class VisualizationDemo(object):
                 yield process_predictions(frame, predictions)
         else:
             for frame in frame_gen:
-                yield process_predictions(frame, self.predictor(frame))
+                # OWN CHANGES:
+                frame = crop_frame(frame, self.final_shape)
+                outputs = self.predictor(frame)
+                yield process_predictions(frame, outputs)
 
 
 class AsyncPredictor:
